@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDB Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/ngl@0.10.4/dist/ngl.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        #viewport { width: 100%; height: 500px; }
+        #info { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>PDB Viewer</h1>
+    <label for="pdbSelect">Select PDB:</label>
+    <select id="pdbSelect"></select>
+    <label for="rowSelect">Select Row:</label>
+    <select id="rowSelect"></select>
+    <div id="viewport"></div>
+    <div id="info"></div>
+    <label for="toggleSurroundingRes">Show Surrounding Residues:</label>
+    <input type="checkbox" id="toggleSurroundingRes" checked>
+
+    <script>
+        // Initialize NGL Stage
+	const stage = new NGL.Stage("viewport", {backgroundColor: "white"});
+
+        // Function to fetch and parse CSV data
+        function fetchCSVData(url) {
+            return fetch(url)
+                .then(response => response.text())
+                .then(text => parseCSV(text));
+        }
+
+        // Function to parse CSV text with '|' as separator
+        function parseCSV(text) {
+            const rows = text.trim().split("\n");
+            const headers = rows[0].split("|");
+            return rows.slice(1).map((row, rowIndex) => {
+                const values = row.split("|");
+                return headers.reduce((obj, header, index) => {
+                    try {
+                        if (header === "crossing_res" || header === "surrounding_res" || header === "crossing_res_w_buff") {
+                            // Split the string by ';' and convert to an array of numbers
+                            const valueString = values[index].trim();
+                            obj[header] = valueString ? valueString.split(";").map(Number) : [];
+                        } else {
+                            obj[header] = header === 'i' || header === 'j' ? Number(values[index]) : values[index];
+                        }
+                    } catch (e) {
+                        console.error(`Error parsing row ${rowIndex + 1}, column '${header}':`, values[index], e);
+                        obj[header] = []; // Default to an empty array on error
+                    }
+                    return obj;
+                }, {});
+            });
+        }
+
+        // Function to populate PDB Select Dropdown
+        function populatePDBSelect(pdbFiles) {
+            const pdbSelect = document.getElementById("pdbSelect");
+            pdbFiles.forEach(file => {
+                const option = document.createElement("option");
+                option.text = file;
+                option.value = file;
+                pdbSelect.add(option);
+            });
+
+            // Set up event listener for PDB selection
+            pdbSelect.addEventListener('change', function() {
+                loadPDB(this.value);
+            });
+
+            // Initialize viewer with the first PDB file
+            if (pdbFiles.length > 0) {
+                loadPDB(pdbFiles[0]);
+            }
+        }
+
+        // Load the selected PDB file
+        function loadPDB(file) {
+            stage.removeAllComponents();
+            stage.loadFile(`PDB/${file}`).then(component => {
+                component.addRepresentation("cartoon");
+                component.autoView();
+                updateRowSelect(file);
+            });
+        }
+
+        // Update the row select options based on the selected PDB
+        function updateRowSelect(pdbFile) {
+            const uniprotID = pdbFile.split('.')[0];
+            const rows = csvData.filter(row => row.UniprotID === uniprotID);
+
+            const rowSelect = document.getElementById("rowSelect");
+            rowSelect.innerHTML = ''; // Clear existing options
+
+            rows.forEach((row, index) => {
+                const option = document.createElement("option");
+                option.text = `ENT-ID: ${row["ENT-ID"]}, i: ${row.i}, j: ${row.j}`;
+                option.value = index;
+                rowSelect.add(option);
+            });
+
+            // Set up event listener for row selection
+            rowSelect.addEventListener('change', function() {
+                highlightResidues(rows[this.value]);
+            });
+
+            // Automatically highlight the first row
+            if (rows.length > 0) {
+                rowSelect.selectedIndex = 0; // Select the first option
+                highlightResidues(rows[0]); // Highlight residues for the first row
+            }
+        }
+
+        // Highlight residues based on the selected row
+        function highlightResidues(row) {
+
+            const component = stage.compList[0];
+            component.removeAllRepresentations();
+	    component.addRepresentation("cartoon", {color: "cyan"});
+
+	    // highlight loop
+            component.addRepresentation("cartoon", {
+                sele: `${row.i}-${row.j}`,
+                color: "red"
+            });
+
+            component.addRepresentation("spacefill", {
+                sele: `${row.i} or ${row.j}`,
+                color: "red"
+            });
+
+            //component.addRepresentation("cartoon", {
+            //    sele: row.surrounding_res.map(id => `${id}`).join(' or '),
+            //   color: "green"
+            //});
+
+	    // Handle surrounding residues based on checkbox state
+	    if (document.getElementById("toggleSurroundingRes").checked) {
+	        surroundingResRep = component.addRepresentation("cartoon", {
+		    sele: row.surrounding_res.map(id => `${id}`).join(' or '),
+		    color: "green"
+	        });
+	    } else {
+	        if (surroundingResRep) {
+		    surroundingResRep.setVisibility(false);
+	        }
+	    }
+
+            component.addRepresentation("spacefill", {
+		sele: row.crossing_res.map(id => `${id} and .CA`).join(' or '),
+                color: "blue"
+            });
+	    console.log("Crossing residues selection command:", row.crossing_res.map(id => `${id} and .CA`).join(' or '))
+
+            component.addRepresentation("cartoon", {
+                sele: row.crossing_res_w_buff.map(id => `${id}`).join(' or '),
+                color: "blue"
+            });
+
+            // Display information
+            document.getElementById("info").innerHTML = `
+                <strong>UniprotID:</strong> ${row.UniprotID}<br>
+                <strong>ENT-ID:</strong> ${row["ENT-ID"]}<br>
+                <strong>i:</strong> ${row.i} (${row["i-resname"]})<br>
+                <strong>j:</strong> ${row.j} (${row["j-resname"]})<br>
+       	        <strong>Crossing(s):</strong> ${row.crossing_res.join(', ')}<br>
+       	        <strong>Crossing Residues with buff:</strong> ${row.crossing_res_w_buff.join(', ')}<br>
+                <strong>Surrounding Residues(s):</strong> ${row.surrounding_res.join(', ')}
+            `;
+        }
+
+        // Load CSV data and initialize the viewer
+        let csvData = [];
+        fetchCSVData('pdb_info.csv').then(data => {
+            csvData = data;
+            const pdbFiles = [...new Set(csvData.map(row => `${row.UniprotID}.pdb`))];
+            populatePDBSelect(pdbFiles);
+        });
+
+	// Add event listener for the checkbox
+        document.getElementById("toggleSurroundingRes").addEventListener('change', function() {
+            const currentRow = csvData.find(row => row.UniprotID === document.getElementById("pdbSelect").value.split('.')[0]);
+            if (currentRow) {
+                highlightResidues(currentRow);
+            }
+        });
+
+    </script>
+</body>
+</html>
+
